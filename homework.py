@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import time
 from http import HTTPStatus
 
@@ -11,6 +12,20 @@ from requests.exceptions import HTTPError, RequestException
 from exceptions import TokenError
 
 load_dotenv()
+
+# logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# handler
+handler = logging.StreamHandler(stream=sys.stdout)
+logger.addHandler(handler)
+
+# formatter
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+handler.setFormatter(formatter)
 
 
 PRACTICUM_TOKEN = os.getenv('YA_TOKEN')
@@ -35,6 +50,7 @@ def check_tokens():
         or TELEGRAM_TOKEN is None
         or TELEGRAM_CHAT_ID is None
     ):
+        logger.critical('Ошибка при получении токенов или id чата')
         raise TokenError()
 
     return True
@@ -43,6 +59,7 @@ def check_tokens():
 def send_message(bot, message):
     """Отправка сообщения о статусе работы в telegram."""
     bot.send_message(TELEGRAM_CHAT_ID, message)
+    logger.debug(f'Сообщение отправлено: "{message}"')
 
 
 def get_api_answer(timestamp):
@@ -54,7 +71,7 @@ def get_api_answer(timestamp):
             params={'from_date': timestamp}
         )
     except RequestException as error:
-        print(error)
+        logger.error(f'Ошибка эндпоинта {error}')
 
     if response.status_code != HTTPStatus.OK:
         raise HTTPError(
@@ -67,15 +84,19 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверка валидности ответа от api."""
     if not isinstance(response, dict):
+        logger.error('Ответ - не словарь!')
         raise TypeError('Некорректный тип ответа')
 
     if 'current_date' not in response:
+        logger.error('В ответе отсутствует текущая дата')
         raise KeyError('В ответе отсутствует ключ "current_date"')
 
     if 'homeworks' not in response:
+        logger.error('В ответе отсутствует список работ')
         raise KeyError('В ответе отсутствует ключ "homeworks"')
 
     if not isinstance(response['homeworks'], list):
+        logger.error('Перечень работ - не список!')
         raise TypeError('Некорректный тип "homeworks"')
 
 
@@ -86,10 +107,13 @@ def parse_status(homework):
     verdict = HOMEWORK_VERDICTS.get(homework_status)
 
     if not homework_name:
+        logger.error('Отсутствует ключ "homework_name"')
         raise KeyError('Отсутствует ключ "homework_name"')
     if not homework_status:
+        logger.error('Отсутствует ключ "status"')
         raise KeyError('Отсутствует ключ "status"')
     if not verdict:
+        logger.error('Некорректное значение статуса работы')
         raise KeyError('Некорректное значение статуса работы')
 
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -104,6 +128,7 @@ def main():
     timestamp = int(time.time())
     previous_status = ''
     current_status = ''
+    error_occurred = None
 
     while True:
         try:
@@ -118,12 +143,19 @@ def main():
                 message = parse_status(homework)
                 send_message(bot, message)
                 current_status = homework['status']
+            else:
+                logger.debug('Статус не изменился')
 
             timestamp = response['current_date']
 
         except Exception as error:
+            error_occurred = True
             message = f'Сбой в работе программы: {error}'
-            print(message)
+            logger.error(f'Ошибка: {error}')
+
+            if error_occurred:
+                send_message(bot, error)
+                error_occurred = False
 
         finally:
             time.sleep(RETRY_PERIOD)
