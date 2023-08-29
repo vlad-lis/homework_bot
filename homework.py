@@ -6,16 +6,17 @@ from http import HTTPStatus
 
 import requests
 import telegram
-from telegram.error import TelegramError
 from dotenv import load_dotenv
 from requests.exceptions import HTTPError, RequestException
+from telegram.error import TelegramError
+
+from exceptions import (CurrentDateKeyError, ResponseTypeError,
+                        HomeworksTypeError, HomeworksKeyError,
+                        HomeworkNameKeyError, HomeworkStatusKeyError,
+                        VerdictKeyError)
 
 load_dotenv()
 
-# Пробовал делать тут logger = None (или вообще убирать объявление логгера),
-# чтобы уже в main были все настройки,
-# но так не проходят тесты, хотя логгер работает
-logger = logging.getLogger(__name__)
 
 PRACTICUM_TOKEN = os.getenv('YA_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TG_TOKEN')
@@ -40,7 +41,7 @@ def check_tokens():
 def send_message(bot, message):
     """Отправка сообщения о статусе работы в telegram."""
     bot.send_message(TELEGRAM_CHAT_ID, message)
-    logger.debug(f'Сообщение отправлено: "{message}"')
+    logging.debug(f'Сообщение отправлено: "{message}"')
 
 
 def get_api_answer(timestamp):
@@ -52,7 +53,7 @@ def get_api_answer(timestamp):
             params={'from_date': timestamp}
         )
     except RequestException as error:
-        logger.error(f'Ошибка эндпоинта {error}')
+        logging.error(f'Ошибка эндпоинта {error}')
 
     if response.status_code != HTTPStatus.OK:
         raise HTTPError(
@@ -65,20 +66,20 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверка валидности ответа от api."""
     if not isinstance(response, dict):
-        logger.error('Ответ - не словарь!')
-        raise TypeError('Некорректный тип ответа')
+        logging.error('Ответ - не словарь!')
+        raise ResponseTypeError()
 
     if 'current_date' not in response:
-        logger.error('В ответе отсутствует текущая дата')
-        raise KeyError('В ответе отсутствует ключ "current_date"')
+        logging.error('В ответе отсутствует текущая дата')
+        raise CurrentDateKeyError('current_date')
 
     if 'homeworks' not in response:
-        logger.error('В ответе отсутствует список работ')
-        raise KeyError('В ответе отсутствует ключ "homeworks"')
+        logging.error('В ответе отсутствует список работ')
+        raise HomeworksKeyError('homeworks')
 
     if not isinstance(response['homeworks'], list):
-        logger.error('Перечень работ - не список!')
-        raise TypeError('Некорректный тип "homeworks"')
+        logging.error('Перечень работ - не список!')
+        raise HomeworksTypeError('homeworks')
 
 
 def parse_status(homework):
@@ -88,14 +89,14 @@ def parse_status(homework):
     verdict = HOMEWORK_VERDICTS.get(homework_status)
 
     if not homework_name:
-        logger.error('Отсутствует ключ "homework_name"')
-        raise KeyError('Отсутствует ключ "homework_name"')
+        logging.error('Отсутствует ключ "homework_name"')
+        raise HomeworkNameKeyError('homework_name')
     if not homework_status:
-        logger.error('Отсутствует ключ "status"')
-        raise KeyError('Отсутствует ключ "status"')
+        logging.error('Отсутствует ключ "status"')
+        raise HomeworkStatusKeyError('status')
     if not verdict:
-        logger.error('Некорректное значение статуса работы')
-        raise KeyError('Некорректное значение статуса работы')
+        logging.error('Некорректное значение статуса работы')
+        raise VerdictKeyError()
 
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
@@ -103,7 +104,7 @@ def parse_status(homework):
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
-        logger.critical('Ошибка при получении токенов или id чата')
+        logging.critical('Ошибка при получении токенов или id чата')
         raise SystemExit(1)
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
@@ -127,12 +128,12 @@ def main():
                 current_status = homework['status']
                 error_message_sent = False
             else:
-                logger.debug('Статус не изменился')
+                logging.info('Изменений нет')
 
             timestamp = response['current_date']
 
         except Exception as error:
-            logger.error(f'Ошибка: {error}')
+            logging.error(f'Ошибка: {error}')
 
             if not error_message_sent:
                 message = f'Сбой в работе программы: {error}'
@@ -141,25 +142,26 @@ def main():
                     send_message(bot, error)
                     error_message_sent = True
                 except TelegramError as tg_error:
-                    logger.error(f'Ошибка TG: {tg_error}')
+                    logging.error(f'Ошибка TG: {tg_error}')
 
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
-    # logger
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    log_file_path = os.path.join(BASE_DIR, 'output.log')
 
-    # handler
-    handler = logging.StreamHandler(stream=sys.stdout)
-    logger.addHandler(handler)
-
-    # formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format=(
+            '%(asctime)s [%(levelname)s] - '
+            '(%(filename)s).%(funcName)s:%(lineno)d - %(message)s'
+        ),
+        handlers=[
+            logging.FileHandler(log_file_path),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
-    handler.setFormatter(formatter)
 
     main()
